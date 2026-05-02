@@ -4,16 +4,16 @@ macOS 统一包管理器 GUI — 在一个界面里搜索和管理 Homebrew / NP
 
 ## 功能
 
-- **跨 PM 搜索** — 同时查询 5 个包管理器，结果按相关度排序
+- **跨包管理器搜索** — 同时查询 5 个包管理器，结果按相关度排序
 - **包详情** — 版本、描述、主页、许可证、依赖
 - **一键安装** — 内置终端实时输出
 - **筛选切换** — 侧边栏勾选/取消，即时重新搜索
-- **自定义路径** — 设置中为每个 PM 指定二进制路径
+- **自定义路径** — 设置中为每个包管理器指定二进制路径
 - **macOS 原生** — 毛玻璃、hiddenInset 标题栏、暗色主题
 
 ## 支持
 
-| PM | 搜索 | 安装 |
+| 包管理器 | 搜索 | 安装 |
 |---|---|---|
 | Homebrew | `brew search` | `brew install` |
 | NPM | `npm search --json` | `npm install -g` |
@@ -45,15 +45,15 @@ DMG 通过 GitHub Releases 分发：
 
 ```
 ├── electron/
-│   ├── main.cjs              # 主进程 IPC + PM 配置 + CLI spawn
+│   ├── main.cjs              # 主进程 IPC + 包管理器配置 + CLI spawn
 │   └── preload.cjs            # contextBridge API
 ├── src/
 │   ├── App.tsx                # 状态管理 + 搜索/安装/卸载
 │   ├── main.tsx               # React 入口
 │   ├── index.css              # 全局样式
-│   ├── types/index.ts         # 类型 + PM_LIST 定义
+│   ├── types/index.ts         # 类型 + 包管理器列表定义
 │   └── components/
-│       ├── Sidebar.tsx         # PM 选择 + 设置入口
+│       ├── Sidebar.tsx         # 包管理器选择 + 设置入口
 │       ├── SearchBar.tsx       # 搜索框
 │       ├── PackageCard.tsx     # 结果卡片
 │       ├── PackageDetail.tsx   # 详情面板
