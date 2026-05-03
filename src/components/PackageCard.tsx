@@ -8,6 +8,7 @@ interface Props {
   pkg: PackageResult;
   onSelect: () => void;
   onInstall: () => void;
+  onUninstall: () => void;
 }
 
 const cardVariants = {
@@ -28,7 +29,7 @@ const cardVariants = {
   tap: { scale: 0.985, transition: { duration: 0.1 } },
 };
 
-export default function PackageCard({ pmKey, pkg, onSelect, onInstall }: Props) {
+export default function PackageCard({ pmKey, pkg, onSelect, onInstall, onUninstall }: Props) {
   const pm = PM_LIST.find((p) => p.key === pmKey)!;
 
   return (
@@ -71,18 +72,31 @@ export default function PackageCard({ pmKey, pkg, onSelect, onInstall }: Props) 
         </div>
       </div>
 
-      {/* 安装按钮 */}
-      <motion.button
-        onClick={(e) => {
-          e.stopPropagation();
-          onInstall();
-        }}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.92 }}
-        className="ml-3 px-3.5 py-1.5 rounded-full bg-accent-blue/15 text-accent-blue text-xs font-semibold hover:bg-accent-blue/25 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-      >
-        安装
-      </motion.button>
+      {/* 操作按钮 */}
+      <div className="ml-3 flex items-center space-x-1.5 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+        <motion.button
+          onClick={(e) => {
+            e.stopPropagation();
+            onInstall();
+          }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.92 }}
+          className="px-3 py-1.5 rounded-full bg-accent-blue/15 text-accent-blue text-xs font-semibold hover:bg-accent-blue/25 transition-all"
+        >
+          安装
+        </motion.button>
+        <motion.button
+          onClick={(e) => {
+            e.stopPropagation();
+            onUninstall();
+          }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.92 }}
+          className="px-3 py-1.5 rounded-full bg-red-500/15 text-red-400 text-xs font-semibold hover:bg-red-500/25 transition-all"
+        >
+          卸载
+        </motion.button>
+      </div>
     </motion.div>
   );
 }

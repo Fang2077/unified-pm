@@ -46,6 +46,7 @@ export interface LogLine {
 export type CmdStatus = 'idle' | 'running' | 'done' | 'error';
 
 export interface CmdState {
+  taskId: string;
   status: CmdStatus;
   logs: LogLine[];
   exitCode: number | null;
@@ -76,9 +77,9 @@ export interface AppSettings {
 
 // ---- PM 配置表 ----
 export const PM_LIST: PMInfo[] = [
-  { key: 'homebrew', name: 'Homebrew', icon: '🍺', color: '#FBB040', cmd: 'brew' },
-  { key: 'npm', name: 'NPM', icon: '📦', color: '#CB3837', cmd: 'npm' },
-  { key: 'pip', name: 'Pip', icon: '🐍', color: '#3775A9', cmd: 'pip3' },
-  { key: 'cargo', name: 'Cargo', icon: '🦀', color: '#DEA584', cmd: 'cargo' },
-  { key: 'gem', name: 'Gem', icon: '💎', color: '#E9573F', cmd: 'gem' },
+  { key: 'homebrew', name: 'Homebrew', icon: 'H', color: '#FBB040', cmd: 'brew' },
+  { key: 'npm', name: 'NPM', icon: 'N', color: '#CB3837', cmd: 'npm' },
+  { key: 'pip', name: 'Pip', icon: 'P', color: '#3775A9', cmd: 'pip3' },
+  { key: 'cargo', name: 'Cargo', icon: 'C', color: '#DEA584', cmd: 'cargo' },
+  { key: 'gem', name: 'Gem', icon: 'G', color: '#E9573F', cmd: 'gem' },
 ];

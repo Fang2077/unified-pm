@@ -2,8 +2,6 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const https = require('https');
 const path = require('path');
-const fs = require('fs');
-const os = require('os');
 
 let mainWindow = null;
 
@@ -21,17 +19,10 @@ function buildEnv(extra) {
     ...process.env,
     HOME: home,
     PATH: `${extraPath}:${process.env.PATH || '/usr/bin:/bin'}`,
+    HOMEBREW_NO_AUTO_UPDATE: '1',
     ...extra,
   };
 }
-
-// PyPI Simple Index 缓存（内存 + 磁盘双层缓存）
-let pypiCache = null;       // { names: string[], timestamp: number }
-const PYPI_CACHE_TTL = 10 * 60 * 1000; // 内存缓存 10 分钟
-const PYPI_DISK_CACHE_TTL = 24 * 60 * 60 * 1000; // 磁盘缓存 24 小时
-const PYPI_CACHE_DIR = path.join(os.homedir(), '.unified-pm');
-const PYPI_CACHE_FILE = path.join(PYPI_CACHE_DIR, 'pypi-index.json');
-let pypiPreloadPromise = null; // 用于追踪预加载
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -67,7 +58,7 @@ function createWindow() {
 const PM_CONFIG = {
   homebrew: {
     name: 'Homebrew',
-    icon: '🍺',
+    icon: 'H',
     color: '#FBB040',
     cmd: 'brew',
     searchArgs: ['search'],
@@ -83,7 +74,7 @@ const PM_CONFIG = {
   },
   npm: {
     name: 'NPM',
-    icon: '📦',
+    icon: 'N',
     color: '#CB3837',
     cmd: 'npm',
     searchArgs: ['search', '--json'],
@@ -107,7 +98,7 @@ const PM_CONFIG = {
   },
   pip: {
     name: 'Pip',
-    icon: '🐍',
+    icon: 'P',
     color: '#3775A9',
     cmd: 'pip3',
     infoArgs: (pkg) => [
@@ -137,7 +128,7 @@ except Exception as e:
   },
   cargo: {
     name: 'Cargo',
-    icon: '🦀',
+    icon: 'C',
     color: '#DEA584',
     cmd: 'cargo',
     searchArgs: (query) => ['search', '--limit', '20', query],
@@ -160,7 +151,7 @@ except Exception as e:
   },
   gem: {
     name: 'Gem',
-    icon: '💎',
+    icon: 'G',
     color: '#E9573F',
     cmd: 'gem',
     searchArgs: (query) => ['search', '--remote', query],
@@ -182,6 +173,9 @@ except Exception as e:
   },
 };
 
+// ---- 活跃进程表（用于终止） ----
+const activeProcesses = new Map();
+
 // ---- 执行包管理器命令（实时流输出） ----
 function runCommand(pmKey, args, event, channelId, cmdOverride) {
   const config = PM_CONFIG[pmKey];
@@ -197,6 +191,8 @@ function runCommand(pmKey, args, event, channelId, cmdOverride) {
     shell: true,
   });
 
+  activeProcesses.set(channelId, child);
+
   child.stdout.on('data', (data) => {
     event.sender.send(`cmd-stdout-${channelId}`, data.toString());
   });
@@ -206,10 +202,12 @@ function runCommand(pmKey, args, event, channelId, cmdOverride) {
   });
 
   child.on('close', (code) => {
+    activeProcesses.delete(channelId);
     event.sender.send(`cmd-done-${channelId}`, code);
   });
 
   child.on('error', (err) => {
+    activeProcesses.delete(channelId);
     event.sender.send(`cmd-error-${channelId}`, err.message);
   });
 
@@ -243,88 +241,34 @@ function runCommandCollect(pmKey, args, cmdOverride) {
   });
 }
 
-// ---- PyPI Simple Index 搜索（内存缓存 + 磁盘缓存 + 后台刷新） ----
-function readDiskCache() {
-  try {
-    if (!fs.existsSync(PYPI_CACHE_FILE)) return null;
-    const raw = fs.readFileSync(PYPI_CACHE_FILE, 'utf-8');
-    const cached = JSON.parse(raw);
-    if (Array.isArray(cached.names) && cached.names.length > 0) {
-      return cached; // { names: string[], timestamp: number }
-    }
-  } catch {}
-  return null;
-}
-
-function writeDiskCache(names, timestamp) {
-  try {
-    if (!fs.existsSync(PYPI_CACHE_DIR)) fs.mkdirSync(PYPI_CACHE_DIR, { recursive: true });
-    fs.writeFileSync(PYPI_CACHE_FILE, JSON.stringify({ names, timestamp }), 'utf-8');
-  } catch {}
-}
-
-async function fetchPypiIndexOnline() {
-  // 使用 Node.js 内置 fetch（自动处理 gzip 解压，39MB → ~5-8MB 传输）
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    const response = await fetch('https://pypi.org/simple/', {
-      headers: { 'Accept': 'application/vnd.pypi.simple.v1+json', 'User-Agent': 'UnifiedPM/1.0' },
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`PyPI returned ${response.status}`);
-    }
-
-    const data = await response.json();
-    const names = (data.projects || []).map((p) => p.name);
-    if (names.length === 0) {
-      throw new Error('PyPI returned empty project list');
-    }
-    return names;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchPypiIndex() {
-  const now = Date.now();
-
-  // 1) 内存缓存（10 分钟有效）
-  if (pypiCache && (now - pypiCache.timestamp) < PYPI_CACHE_TTL) {
-    return pypiCache.names;
-  }
-
-  // 2) 磁盘缓存（24 小时有效）
-  const disk = readDiskCache();
-  if (disk && (now - disk.timestamp) < PYPI_DISK_CACHE_TTL) {
-    pypiCache = { names: disk.names, timestamp: disk.timestamp };
-    return disk.names;
-  }
-
-  // 3) 在线获取（首次下载约需 10-30s，39MB JSON）
-  try {
-    const names = await fetchPypiIndexOnline();
-    pypiCache = { names, timestamp: now };
-    writeDiskCache(names, now);
-    return names;
-  } catch (e) {
-    // 如果在线获取失败但有旧磁盘缓存，降级使用
-    if (disk) {
-      console.error('PyPI fetch failed, falling back to stale disk cache:', e.message);
-      pypiCache = { names: disk.names, timestamp: disk.timestamp };
-      return disk.names;
-    }
-    throw e;
-  }
-}
-
-// 应用启动时预加载 PyPI 索引（后台静默进行，不阻塞 UI）
-function preloadPypiIndex() {
-  pypiPreloadPromise = fetchPypiIndex().catch((e) => {
-    console.error('PyPI preload failed:', e.message);
+// ---- PyPI 包信息查询（直接 API 查询，无需下载索引） ----
+function fetchPypiPackageInfo(packageName) {
+  return new Promise((resolve, reject) => {
+    const url = `https://pypi.org/pypi/${encodeURIComponent(packageName)}/json`;
+    https.get(url, { headers: { 'User-Agent': 'UnifiedPM/1.0' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          try {
+            const json = JSON.parse(data);
+            const info = json.info || {};
+            resolve({
+              name: info.name || packageName,
+              version: info.version || '',
+              description: info.summary || '',
+              pm: 'pip',
+            });
+          } catch {
+            reject(new Error('Failed to parse PyPI response'));
+          }
+        } else if (res.statusCode === 404) {
+          resolve(null); // 包不存在
+        } else {
+          reject(new Error(`PyPI returned ${res.statusCode}`));
+        }
+      });
+    }).on('error', reject);
   });
 }
 
@@ -334,26 +278,19 @@ ipcMain.handle('pm-search', async (_event, pmKey, query, paths) => {
     const config = PM_CONFIG[pmKey];
     if (!config) return { pmKey, results: [], error: 'Unknown manager' };
 
-    // pip 使用 PyPI Simple Index 缓存搜索（首次下载 39MB 约需 10-30s，后续走缓存）
+    // pip 直接查询 PyPI JSON API（快速，无需下载索引）
     if (pmKey === 'pip') {
-      const allNames = await Promise.race([
-        fetchPypiIndex(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('PyPI search timeout')), 65000)),
-      ]);
-      const q = query.toLowerCase();
-      const matched = allNames.filter((n) => n.toLowerCase().includes(q));
-      // 按相似度排序: 精确匹配 > 前缀匹配 > 包含匹配
-      matched.sort((a, b) => {
-        const al = a.toLowerCase(), bl = b.toLowerCase();
-        const aExact = al === q ? 1 : 0, bExact = bl === q ? 1 : 0;
-        if (aExact !== bExact) return bExact - aExact;
-        const aPref = al.startsWith(q) ? 1 : 0, bPref = bl.startsWith(q) ? 1 : 0;
-        if (aPref !== bPref) return bPref - aPref;
-        return al.localeCompare(bl);
-      });
-      const results = matched.slice(0, 50).map((name) => ({ name, pm: 'pip' }));
-      return { pmKey, results, error: null };
+      try {
+        const pkgInfo = await fetchPypiPackageInfo(query);
+        if (pkgInfo) {
+          return { pmKey, results: [pkgInfo], error: null };
+        }
+        return { pmKey, results: [], error: `未找到 '${query}'，请尝试其他关键词` };
+      } catch (err) {
+        return { pmKey, results: [], error: err.message };
+      }
     }
+
 
     const pathsObj = paths || {};
     // searchCmd is a separate binary (e.g. python3 for pip); prefer custom path for that binary
@@ -493,11 +430,17 @@ ipcMain.on('pm-uninstall', (event, { pmKey, packageName, channelId, paths }) => 
   runCommand(pmKey, args, event, channelId, cmdOverride);
 });
 
+ipcMain.on('pm-kill', (_event, channelId) => {
+  const child = activeProcesses.get(channelId);
+  if (child) {
+    child.kill('SIGTERM');
+    activeProcesses.delete(channelId);
+  }
+});
+
 // ---- 应用生命周期 ----
 app.whenReady().then(() => {
   createWindow();
-  // 后台预加载 PyPI 索引，避免用户首次搜索时等待
-  setTimeout(preloadPypiIndex, 2000);
 });
 
 app.on('window-all-closed', () => {

@@ -16,7 +16,11 @@ export default function Settings({ settings, onSave, onClose }: Props) {
   const [paths, setPaths] = useState<Record<string, string>>({ ...DEFAULT_PATHS, ...settings.pmPaths });
 
   const handleSave = () => {
-    onSave({ pmPaths: paths });
+    const cleaned: Record<string, string> = {};
+    for (const key of Object.keys(paths)) {
+      if (paths[key].trim()) cleaned[key] = paths[key].trim();
+    }
+    onSave({ pmPaths: cleaned });
     onClose();
   };
 
@@ -68,10 +72,10 @@ export default function Settings({ settings, onSave, onClose }: Props) {
             <div className="space-y-2.5">
               {PM_LIST.map((pm) => (
                 <div key={pm.key} className="flex items-center space-x-3">
-                  <span className="w-16 text-xs text-white/45 flex-shrink-0">{pm.icon} {pm.name}</span>
+                  <span className="w-16 text-xs text-white/45 flex-shrink-0">{pm.name}</span>
                   <input
                     type="text"
-                    value={paths[pm.key] || pm.cmd}
+                    value={paths[pm.key]}
                     onChange={(e) => setPaths((p) => ({ ...p, [pm.key]: e.target.value }))}
                     placeholder={pm.cmd}
                     className="flex-1 bg-white/5 border border-white/8 rounded-lg px-3 py-1.5 text-xs text-white/80 font-mono placeholder:text-white/15 outline-none focus:border-accent-blue/40 focus:bg-white/8 transition-all"

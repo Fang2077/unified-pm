@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('pmAPI', {
   uninstall: (pmKey, packageName, channelId, paths) =>
     ipcRenderer.send('pm-uninstall', { pmKey, packageName, channelId, paths }),
 
+  /** 终止运行中的命令 */
+  kill: (channelId) => ipcRenderer.send('pm-kill', channelId),
+
   /** 监听安装/卸载输出 */
   onCmdStdout: (channelId, callback) => {
     const handler = (_event, data) => callback(data);

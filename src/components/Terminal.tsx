@@ -5,21 +5,21 @@ import type { CmdState } from '../types';
 
 interface Props {
   cmdState: CmdState;
-  onClose: () => void;
+  onKill: () => void;
+  onHide: () => void;
+  onDismiss: () => void;
 }
 
-export default function Terminal({ cmdState, onClose }: Props) {
+export default function Terminal({ cmdState, onKill, onHide, onDismiss }: Props) {
   const logEndRef = useRef<HTMLDivElement>(null);
   const pm = cmdState.pmKey ? PM_LIST.find((p) => p.key === cmdState.pmKey) : null;
 
-  // 自动滚动到底部
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [cmdState.logs]);
 
   const isRunning = cmdState.status === 'running';
   const isDone = cmdState.status === 'done';
-  const isError = cmdState.status === 'error';
 
   return (
     <motion.div
@@ -29,10 +29,8 @@ export default function Terminal({ cmdState, onClose }: Props) {
       transition={{ duration: 0.2 }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
     >
-      {/* 遮罩 */}
       <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
 
-      {/* 终端面板 */}
       <motion.div
         initial={{ opacity: 0, y: 80, scale: 0.93 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -44,24 +42,39 @@ export default function Terminal({ cmdState, onClose }: Props) {
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-white/8">
           <div className="flex items-center space-x-3">
-            {/* 红绿灯 */}
             <div className="flex space-x-1.5">
+              {/* 红: 终止 */}
               <button
-                onClick={isRunning ? undefined : onClose}
+                onClick={isRunning ? onKill : onDismiss}
+                title={isRunning ? '终止运行' : '关闭'}
                 className="w-3 h-3 rounded-full bg-[#FF5F57] hover:bg-[#FF3B30] transition-colors"
               />
-              <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
-              <div className="w-3 h-3 rounded-full bg-[#28CA41]" />
+              {/* 黄: 隐藏到侧边栏 */}
+              {isRunning && (
+                <button
+                  onClick={onHide}
+                  title="收纳到侧边栏"
+                  className="w-3 h-3 rounded-full bg-[#FFBD2E] hover:bg-[#FFCC02] transition-colors"
+                />
+              )}
+              {/* 绿: 无操作 */}
+              <div className="w-3 h-3 rounded-full bg-[#28CA41] opacity-40" />
             </div>
             <div className="flex items-center space-x-2">
-              {pm && <span className="text-lg">{pm.icon}</span>}
+              {pm && (
+                <span
+                  className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white/80 flex-shrink-0"
+                  style={{ backgroundColor: `${pm.color}30` }}
+                >
+                  {pm.icon}
+                </span>
+              )}
               <span className="text-sm font-semibold text-white/80">
                 {cmdState.action === 'install' ? '安装' : '卸载'}: {cmdState.packageName}
               </span>
             </div>
           </div>
 
-          {/* 状态指示 */}
           <div className="flex items-center space-x-2">
             {isRunning && (
               <div className="flex items-center space-x-1.5">
@@ -75,7 +88,7 @@ export default function Terminal({ cmdState, onClose }: Props) {
                 <span className="text-[11px] text-accent-green/80 font-medium">完成</span>
               </div>
             )}
-            {isError && (
+            {cmdState.status === 'error' && (
               <div className="flex items-center space-x-1.5">
                 <div className="w-2 h-2 rounded-full bg-accent-pink" />
                 <span className="text-[11px] text-accent-pink/80 font-medium">错误 (code: {cmdState.exitCode})</span>
@@ -105,11 +118,10 @@ export default function Terminal({ cmdState, onClose }: Props) {
             </div>
           ))}
 
-          {/* 运行中的光标 */}
           {isRunning && (
             <div className="flex items-center space-x-2">
               <span className="text-accent-blue/60">▍</span>
-              <span className="text-white/25 italic">安装中...</span>
+              <span className="text-white/25 italic">运行中...</span>
             </div>
           )}
 
@@ -122,7 +134,7 @@ export default function Terminal({ cmdState, onClose }: Props) {
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.96 }}
-              onClick={onClose}
+              onClick={onDismiss}
               className="px-5 py-2 rounded-lg bg-white/6 text-white/70 text-sm font-medium hover:bg-white/10 transition-colors"
             >
               关闭终端

@@ -40,6 +40,7 @@ const mockAPI = {
   }),
   install: () => {},
   uninstall: () => {},
+  kill: () => {},
   onCmdStdout: () => () => {},
   onCmdStderr: () => () => {},
   onCmdDone: () => () => {},
@@ -59,14 +60,8 @@ export default function App() {
   const [selectedPackage, setSelectedPackage] = useState<{ pm: PMKey; pkg: PackageResult } | null>(null);
   const [packageDetail, setPackageDetail] = useState<any>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
-  const [cmdState, setCmdState] = useState<CmdState>({
-    status: 'idle',
-    logs: [],
-    exitCode: null,
-    pmKey: null,
-    packageName: null,
-    action: null,
-  });
+  const [tasks, setTasks] = useState<Map<string, CmdState>>(new Map());
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -144,88 +139,109 @@ export default function App() {
     setIsLoadingDetail(false);
   };
 
-  // 安装包
-  const handleInstall = (pmKey: PMKey, packageName: string) => {
-    const channelId = `install-${Date.now()}`;
-    setCmdState({
+  // 启动一个命令任务
+  const launchTask = (pmKey: PMKey, packageName: string, action: 'install' | 'uninstall') => {
+    const taskId = `${action}-${packageName}-${Date.now()}`;
+    const channelId = isElectron ? taskId : '';
+    const pmInfo = PM_LIST.find((p) => p.key === pmKey)!;
+
+    const newTask: CmdState = {
+      taskId,
       status: 'running',
-      logs: [{ id: 0, text: `$ ${PM_LIST.find((p) => p.key === pmKey)?.cmd} install ${packageName}\n`, stream: 'system', timestamp: Date.now() }],
+      logs: [{ id: 0, text: `$ ${pmInfo.cmd} ${action} ${packageName}\n`, stream: 'system', timestamp: Date.now() }],
       exitCode: null,
       pmKey,
       packageName,
-      action: 'install',
+      action,
+    };
+
+    setTasks((prev) => {
+      const next = new Map(prev);
+      next.set(taskId, newTask);
+      return next;
     });
+    setActiveTaskId(taskId);
 
     if (isElectron) {
-      pmAPI.install(pmKey, packageName, channelId, settings.pmPaths);
-      const unsubs: (() => void)[] = [];
-      unsubs.push(pmAPI.onCmdStdout(channelId, (data: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          logs: [...prev.logs, { id: prev.logs.length, text: data, stream: 'stdout', timestamp: Date.now() }],
-        }));
-      }));
-      unsubs.push(pmAPI.onCmdStderr(channelId, (data: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          logs: [...prev.logs, { id: prev.logs.length, text: data, stream: 'stderr', timestamp: Date.now() }],
-        }));
-      }));
-      unsubs.push(pmAPI.onCmdDone(channelId, (code: number) => {
-        setCmdState((prev) => ({ ...prev, status: code === 0 ? 'done' : 'error', exitCode: code }));
-        unsubs.forEach((u) => u());
-      }));
-      unsubs.push(pmAPI.onCmdError(channelId, (err: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          status: 'error',
-          logs: [...prev.logs, { id: prev.logs.length, text: `Error: ${err}\n`, stream: 'system', timestamp: Date.now() }],
-        }));
-        unsubs.forEach((u) => u());
-      }));
+      const updateLogs = (data: string, stream: 'stdout' | 'stderr') => {
+        setTasks((prev) => {
+          const next = new Map(prev);
+          const t = next.get(taskId);
+          if (t) {
+            next.set(taskId, {
+              ...t,
+              logs: [...t.logs, { id: t.logs.length, text: data, stream, timestamp: Date.now() }],
+            });
+          }
+          return next;
+        });
+      };
+
+      pmAPI[action](pmKey, packageName, channelId, settings.pmPaths);
+      const u1 = pmAPI.onCmdStdout(channelId, (data: string) => updateLogs(data, 'stdout'));
+      const u2 = pmAPI.onCmdStderr(channelId, (data: string) => updateLogs(data, 'stderr'));
+      const u3 = pmAPI.onCmdDone(channelId, (code: number) => {
+        setTasks((prev) => {
+          const next = new Map(prev);
+          const t = next.get(taskId);
+          if (t) next.set(taskId, { ...t, status: code === 0 ? 'done' : 'error', exitCode: code });
+          return next;
+        });
+        [u1, u2, u3].forEach((u) => u());
+      });
+      const u4 = pmAPI.onCmdError(channelId, (err: string) => {
+        setTasks((prev) => {
+          const next = new Map(prev);
+          const t = next.get(taskId);
+          if (t) {
+            next.set(taskId, {
+              ...t,
+              status: 'error',
+              logs: [...t.logs, { id: t.logs.length, text: `Error: ${err}\n`, stream: 'system', timestamp: Date.now() }],
+            });
+          }
+          return next;
+        });
+        [u1, u2, u3, u4].forEach((u) => u());
+      });
     }
   };
 
-  // 卸载包
-  const handleUninstall = (pmKey: PMKey, packageName: string) => {
-    const channelId = `uninstall-${Date.now()}`;
-    setCmdState({
-      status: 'running',
-      logs: [{ id: 0, text: `$ ${PM_LIST.find((p) => p.key === pmKey)?.cmd} uninstall ${packageName}\n`, stream: 'system', timestamp: Date.now() }],
-      exitCode: null,
-      pmKey,
-      packageName,
-      action: 'uninstall',
-    });
+  const handleInstall = (pmKey: PMKey, packageName: string) => launchTask(pmKey, packageName, 'install');
+  const handleUninstall = (pmKey: PMKey, packageName: string) => launchTask(pmKey, packageName, 'uninstall');
 
-    if (isElectron) {
-      pmAPI.uninstall(pmKey, packageName, channelId, settings.pmPaths);
-      const unsubs: (() => void)[] = [];
-      unsubs.push(pmAPI.onCmdStdout(channelId, (data: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          logs: [...prev.logs, { id: prev.logs.length, text: data, stream: 'stdout', timestamp: Date.now() }],
-        }));
-      }));
-      unsubs.push(pmAPI.onCmdStderr(channelId, (data: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          logs: [...prev.logs, { id: prev.logs.length, text: data, stream: 'stderr', timestamp: Date.now() }],
-        }));
-      }));
-      unsubs.push(pmAPI.onCmdDone(channelId, (code: number) => {
-        setCmdState((prev) => ({ ...prev, status: code === 0 ? 'done' : 'error', exitCode: code }));
-        unsubs.forEach((u) => u());
-      }));
-      unsubs.push(pmAPI.onCmdError(channelId, (err: string) => {
-        setCmdState((prev) => ({
-          ...prev,
-          status: 'error',
-          logs: [...prev.logs, { id: prev.logs.length, text: `Error: ${err}\n`, stream: 'system', timestamp: Date.now() }],
-        }));
-        unsubs.forEach((u) => u());
-      }));
-    }
+  // 终止任务
+  const handleKillTask = (taskId: string) => {
+    if (isElectron) pmAPI.kill(taskId);
+    setTasks((prev) => {
+      const next = new Map(prev);
+      const t = next.get(taskId);
+      if (t && t.status === 'running') {
+        next.set(taskId, { ...t, status: 'error', exitCode: null, logs: [...t.logs, { id: t.logs.length, text: '已终止\n', stream: 'system', timestamp: Date.now() }] });
+      }
+      return next;
+    });
+    if (activeTaskId === taskId) setActiveTaskId(null);
+  };
+
+  // 隐藏任务到侧边栏
+  const handleHideTask = (taskId: string) => {
+    setActiveTaskId(null);
+  };
+
+  // 从侧边栏恢复任务
+  const handleShowTask = (taskId: string) => {
+    setActiveTaskId(taskId);
+  };
+
+  // 清除已完成/错误的任务
+  const handleDismissTask = (taskId: string) => {
+    setTasks((prev) => {
+      const next = new Map(prev);
+      next.delete(taskId);
+      return next;
+    });
+    if (activeTaskId === taskId) setActiveTaskId(null);
   };
 
   const closeDetail = () => {
@@ -233,9 +249,6 @@ export default function App() {
     setPackageDetail(null);
   };
 
-  const closeTerminal = () => {
-    setCmdState({ status: 'idle', logs: [], exitCode: null, pmKey: null, packageName: null, action: null });
-  };
 
   const handleSaveSettings = (s: AppSettings) => {
     setSettings(s);
@@ -289,6 +302,10 @@ export default function App() {
           setSelectedPMs(next);
         }}
         onOpenSettings={() => setShowSettings(true)}
+        tasks={tasks}
+        activeTaskId={activeTaskId}
+        onShowTask={handleShowTask}
+        onDismissTask={handleDismissTask}
       />
 
       {/* 右侧主内容 */}
@@ -326,7 +343,7 @@ export default function App() {
                 key="results"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
+                exit={{ opacity: 0, pointerEvents: 'none', transition: { duration: 0.12 } }}
                 className="space-y-2"
               >
                 {flatResults.map(({ pm, pkg }) => (
@@ -336,6 +353,7 @@ export default function App() {
                     pkg={pkg}
                     onSelect={() => handleSelectPackage(pm, pkg)}
                     onInstall={() => handleInstall(pm, pkg.name)}
+                    onUninstall={() => handleUninstall(pm, pkg.name)}
                   />
                 ))}
               </motion.div>
@@ -346,7 +364,10 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex flex-col items-center justify-center h-full space-y-3"
               >
-                <span className="text-5xl opacity-30">🔍</span>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-30">
+                  <circle cx="11" cy="11" r="7" />
+                  <line x1="16.5" y1="16.5" x2="21" y2="21" />
+                </svg>
                 <p className="text-white/30 text-sm">
                   {isSearching ? '搜索中...' : '没有找到匹配的包'}
                 </p>
@@ -367,12 +388,16 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex flex-col items-center justify-center h-full space-y-4"
               >
-                <div className="flex space-x-3 text-4xl opacity-20">
-                  <span>🍺</span>
-                  <span>📦</span>
-                  <span>🐍</span>
-                  <span>🦀</span>
-                  <span>💎</span>
+                <div className="flex space-x-3">
+                  {PM_LIST.map((pm) => (
+                    <span
+                      key={pm.key}
+                      className="w-12 h-12 rounded-xl flex items-center justify-center text-lg font-bold bg-white/[0.06]"
+                      style={{ color: pm.color }}
+                    >
+                      {pm.icon}
+                    </span>
+                  ))}
                 </div>
                 <p className="text-white/25 text-sm">输入关键词开始跨包管理器搜索</p>
                 <div className="flex flex-wrap gap-2 justify-center">
@@ -408,8 +433,13 @@ export default function App() {
 
       {/* 终端面板 */}
       <AnimatePresence>
-        {cmdState.status !== 'idle' && (
-          <Terminal cmdState={cmdState} onClose={closeTerminal} />
+        {activeTaskId && tasks.has(activeTaskId) && (
+          <Terminal
+            cmdState={tasks.get(activeTaskId)!}
+            onKill={() => handleKillTask(activeTaskId)}
+            onHide={() => handleHideTask(activeTaskId)}
+            onDismiss={() => handleDismissTask(activeTaskId)}
+          />
         )}
       </AnimatePresence>
 

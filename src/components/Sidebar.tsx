@@ -1,12 +1,16 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { PM_LIST } from '../types';
-import type { PMKey } from '../types';
+import type { PMKey, CmdState } from '../types';
 
 interface Props {
   selectedPMs: Set<PMKey>;
   onTogglePM: (key: PMKey) => void;
   onOpenSettings: () => void;
+  tasks: Map<string, CmdState>;
+  activeTaskId: string | null;
+  onShowTask: (taskId: string) => void;
+  onDismissTask: (taskId: string) => void;
 }
 
 const sidebarVariants = {
@@ -23,7 +27,11 @@ const itemVariants = {
   }),
 };
 
-export default function Sidebar({ selectedPMs, onTogglePM, onOpenSettings }: Props) {
+export default function Sidebar({ selectedPMs, onTogglePM, onOpenSettings, tasks, activeTaskId, onShowTask, onDismissTask }: Props) {
+  const hiddenTasks = Array.from(tasks.values()).filter(
+    (t) => t.status === 'running' && t.taskId !== activeTaskId
+  );
+
   return (
     <motion.aside
       variants={sidebarVariants}
@@ -52,6 +60,46 @@ export default function Sidebar({ selectedPMs, onTogglePM, onOpenSettings }: Pro
 
       {/* 分隔线 */}
       <div className="h-px bg-white/6 mx-3 mb-5" />
+
+      {/* 后台任务收纳栏 */}
+      {hiddenTasks.length > 0 && (
+        <div className="mb-5">
+          <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest px-3 mb-2">
+            运行中 · {hiddenTasks.length}
+          </p>
+          <div className="space-y-1">
+            {hiddenTasks.map((task) => {
+              const pm = PM_LIST.find((p) => p.key === task.pmKey);
+              return (
+                <motion.button
+                  key={task.taskId}
+                  initial={{ opacity: 0, x: -12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  whileHover={{ x: 3 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => onShowTask(task.taskId)}
+                  className="w-full flex items-center space-x-2.5 px-3 py-2 rounded-lg text-sm bg-white/4 hover:bg-white/8 transition-all group"
+                >
+                  <span
+                    className="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white/80 flex-shrink-0"
+                    style={{ backgroundColor: pm ? `${pm.color}30` : 'rgba(255,255,255,0.1)' }}
+                  >
+                    {pm?.icon}
+                  </span>
+                  <span className="text-xs text-white/70 truncate flex-1 text-left">
+                    {task.action === 'install' ? '安装' : '卸载'} {task.packageName}
+                  </span>
+                  <motion.div
+                    className="w-2 h-2 rounded-full bg-accent-orange animate-pulse flex-shrink-0"
+                    title="运行中"
+                  />
+                </motion.button>
+              );
+            })}
+          </div>
+          <div className="h-px bg-white/6 mx-3 mt-3" />
+        </div>
+      )}
 
       {/* 包管理器列表 */}
       <div className="flex-1 space-y-0.5 overflow-y-auto">
@@ -83,13 +131,6 @@ export default function Sidebar({ selectedPMs, onTogglePM, onOpenSettings }: Pro
             />
             <span className="text-[11px] font-mono text-white/30 flex-shrink-0 w-11">{pm.cmd}</span>
             <span className="font-medium truncate">{pm.name}</span>
-            {selectedPMs.has(pm.key) && (
-              <motion.span
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                className="ml-auto w-1.5 h-1.5 rounded-full bg-accent-blue flex-shrink-0"
-              />
-            )}
           </motion.button>
         ))}
       </div>
