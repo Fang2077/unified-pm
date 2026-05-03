@@ -55,6 +55,7 @@ export default function App() {
     Object.fromEntries(PM_LIST.map((p) => [p.key, []])) as unknown as Record<PMKey, PackageResult[]>
   );
   const [isSearching, setIsSearching] = useState(false);
+  const [searchErrors, setSearchErrors] = useState<Record<string, string>>({});
   const [selectedPackage, setSelectedPackage] = useState<{ pm: PMKey; pkg: PackageResult } | null>(null);
   const [packageDetail, setPackageDetail] = useState<any>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -91,20 +92,27 @@ export default function App() {
     async (query: string) => {
       if (!query.trim()) {
         setSearchResults(Object.fromEntries(PM_LIST.map((p) => [p.key, []])) as unknown as Record<PMKey, PackageResult[]>);
+        setSearchErrors({});
         return;
       }
       setIsSearching(true);
       const results: Record<string, PackageResult[]> = {};
+      const errors: Record<string, string> = {};
       const promises = PM_LIST.filter((pm) => selectedPMs.has(pm.key)).map(async (pm) => {
         try {
           const res = await api.search(pm.key, query, settings.pmPaths);
           results[pm.key] = res.results || [];
-        } catch {
+          if (res.error) {
+            errors[pm.key] = res.error;
+          }
+        } catch (err: any) {
           results[pm.key] = [];
+          errors[pm.key] = err?.message || 'Search failed';
         }
       });
       await Promise.allSettled(promises);
       setSearchResults(results as Record<PMKey, PackageResult[]>);
+      setSearchErrors(errors);
       setIsSearching(false);
     },
     [selectedPMs]
@@ -342,6 +350,15 @@ export default function App() {
                 <p className="text-white/30 text-sm">
                   {isSearching ? '搜索中...' : '没有找到匹配的包'}
                 </p>
+                {Object.keys(searchErrors).length > 0 && (
+                  <div className="space-y-1 mt-2">
+                    {Object.entries(searchErrors).map(([pmKey, err]) => (
+                      <p key={pmKey} className="text-red-400/60 text-xs">
+                        {PM_LIST.find(p => p.key === pmKey)?.icon} {PM_LIST.find(p => p.key === pmKey)?.name}: {err}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </motion.div>
             ) : (
               <motion.div

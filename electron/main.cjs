@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const https = require('https');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
 let mainWindow = null;
 
@@ -23,9 +25,13 @@ function buildEnv(extra) {
   };
 }
 
-// PyPI Simple Index 缓存
+// PyPI Simple Index 缓存（内存 + 磁盘双层缓存）
 let pypiCache = null;       // { names: string[], timestamp: number }
-const PYPI_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+const PYPI_CACHE_TTL = 10 * 60 * 1000; // 内存缓存 10 分钟
+const PYPI_DISK_CACHE_TTL = 24 * 60 * 60 * 1000; // 磁盘缓存 24 小时
+const PYPI_CACHE_DIR = path.join(os.homedir(), '.unified-pm');
+const PYPI_CACHE_FILE = path.join(PYPI_CACHE_DIR, 'pypi-index.json');
+let pypiPreloadPromise = null; // 用于追踪预加载
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -237,40 +243,88 @@ function runCommandCollect(pmKey, args, cmdOverride) {
   });
 }
 
-// ---- PyPI Simple Index 搜索（Node.js 侧缓存 + 过滤） ----
+// ---- PyPI Simple Index 搜索（内存缓存 + 磁盘缓存 + 后台刷新） ----
+function readDiskCache() {
+  try {
+    if (!fs.existsSync(PYPI_CACHE_FILE)) return null;
+    const raw = fs.readFileSync(PYPI_CACHE_FILE, 'utf-8');
+    const cached = JSON.parse(raw);
+    if (Array.isArray(cached.names) && cached.names.length > 0) {
+      return cached; // { names: string[], timestamp: number }
+    }
+  } catch {}
+  return null;
+}
+
+function writeDiskCache(names, timestamp) {
+  try {
+    if (!fs.existsSync(PYPI_CACHE_DIR)) fs.mkdirSync(PYPI_CACHE_DIR, { recursive: true });
+    fs.writeFileSync(PYPI_CACHE_FILE, JSON.stringify({ names, timestamp }), 'utf-8');
+  } catch {}
+}
+
+async function fetchPypiIndexOnline() {
+  // 使用 Node.js 内置 fetch（自动处理 gzip 解压，39MB → ~5-8MB 传输）
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const response = await fetch('https://pypi.org/simple/', {
+      headers: { 'Accept': 'application/vnd.pypi.simple.v1+json', 'User-Agent': 'UnifiedPM/1.0' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`PyPI returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const names = (data.projects || []).map((p) => p.name);
+    if (names.length === 0) {
+      throw new Error('PyPI returned empty project list');
+    }
+    return names;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchPypiIndex() {
   const now = Date.now();
+
+  // 1) 内存缓存（10 分钟有效）
   if (pypiCache && (now - pypiCache.timestamp) < PYPI_CACHE_TTL) {
     return pypiCache.names;
   }
 
-  return new Promise((resolve, reject) => {
-    const req = https.get('https://pypi.org/simple/', {
-      headers: { 'Accept': 'application/vnd.pypi.simple.v1+json', 'User-Agent': 'UnifiedPM/1.0' },
-    }, (res) => {
-      // 非 200 直接放弃
-      if (res.statusCode !== 200) {
-        req.destroy();
-        reject(new Error(`PyPI returned ${res.statusCode}`));
-        return;
-      }
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
-        try {
-          const body = Buffer.concat(chunks).toString();
-          const data = JSON.parse(body);
-          const names = (data.projects || []).map((p) => p.name);
-          pypiCache = { names, timestamp: now };
-          resolve(names);
-        } catch (e) {
-          reject(e);
-        }
-      });
-      res.on('error', (e) => { req.destroy(); reject(e); });
-    });
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('PyPI request timeout')); });
-    req.on('error', reject);
+  // 2) 磁盘缓存（24 小时有效）
+  const disk = readDiskCache();
+  if (disk && (now - disk.timestamp) < PYPI_DISK_CACHE_TTL) {
+    pypiCache = { names: disk.names, timestamp: disk.timestamp };
+    return disk.names;
+  }
+
+  // 3) 在线获取（首次下载约需 10-30s，39MB JSON）
+  try {
+    const names = await fetchPypiIndexOnline();
+    pypiCache = { names, timestamp: now };
+    writeDiskCache(names, now);
+    return names;
+  } catch (e) {
+    // 如果在线获取失败但有旧磁盘缓存，降级使用
+    if (disk) {
+      console.error('PyPI fetch failed, falling back to stale disk cache:', e.message);
+      pypiCache = { names: disk.names, timestamp: disk.timestamp };
+      return disk.names;
+    }
+    throw e;
+  }
+}
+
+// 应用启动时预加载 PyPI 索引（后台静默进行，不阻塞 UI）
+function preloadPypiIndex() {
+  pypiPreloadPromise = fetchPypiIndex().catch((e) => {
+    console.error('PyPI preload failed:', e.message);
   });
 }
 
@@ -280,11 +334,11 @@ ipcMain.handle('pm-search', async (_event, pmKey, query, paths) => {
     const config = PM_CONFIG[pmKey];
     if (!config) return { pmKey, results: [], error: 'Unknown manager' };
 
-    // pip 使用 PyPI Simple Index 缓存搜索
+    // pip 使用 PyPI Simple Index 缓存搜索（首次下载 39MB 约需 10-30s，后续走缓存）
     if (pmKey === 'pip') {
       const allNames = await Promise.race([
         fetchPypiIndex(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('PyPI search timeout')), 12000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PyPI search timeout')), 65000)),
       ]);
       const q = query.toLowerCase();
       const matched = allNames.filter((n) => n.toLowerCase().includes(q));
@@ -440,7 +494,11 @@ ipcMain.on('pm-uninstall', (event, { pmKey, packageName, channelId, paths }) => 
 });
 
 // ---- 应用生命周期 ----
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  // 后台预加载 PyPI 索引，避免用户首次搜索时等待
+  setTimeout(preloadPypiIndex, 2000);
+});
 
 app.on('window-all-closed', () => {
   app.quit();
