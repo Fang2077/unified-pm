@@ -3,7 +3,7 @@
 macOS 统一包管理器 GUI — 在一个界面里搜索和管理 Homebrew / NPM / Pip / Cargo / Gem。
 
 ## 视频链接
-- **BiliBili** — 【【一个GUI下载全平台包】https://b23.tv/tetcOal
+- **BiliBili** — 【一个GUI下载全平台包】https://b23.tv/tetcOal
 
 ## 功能
 
